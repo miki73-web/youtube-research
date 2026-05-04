@@ -24,16 +24,18 @@ def get_sheets():
     return build("sheets", "v4", credentials=creds)
 
 
+MAX_RESULTS = 100  # 最大取得件数
+
+
 def search_videos(youtube, keywords, days, min_views, log):
     published_after = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    # 複数キーワードをスペース区切りでYouTubeに渡す
     query = " ".join(keywords)
     videos = []
     next_page_token = None
 
-    log(f"🔍 **{' / '.join(keywords)}** を検索中...")
+    log(f"🔍 **{' / '.join(keywords)}** を検索中...（最大 {MAX_RESULTS} 件）")
 
-    while True:
+    while len(videos) < MAX_RESULTS:
         response = youtube.search().list(
             q=query,
             part="id,snippet",
@@ -53,6 +55,8 @@ def search_videos(youtube, keywords, days, min_views, log):
             ).execute()
 
             for item in stats.get("items", []):
+                if len(videos) >= MAX_RESULTS:
+                    break
                 view_count = int(item["statistics"].get("viewCount", 0))
                 if view_count >= min_views:
                     videos.append({
