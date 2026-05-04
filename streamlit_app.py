@@ -177,10 +177,7 @@ with st.form("search_form"):
         help="1〜365日の範囲で指定してください"
     )
     min_views = st.number_input("▶️ 最低再生数", min_value=0, value=10000, step=1000)
-    max_subs  = st.number_input("👥 最大登録者数", min_value=0, value=4000, step=500)
-
-    st.caption("⚠️ キーワードが多い・件数が多いほどAPIの使用量が増えます（1日10,000ポイント上限）")
-
+    max_subs  = st.number_input("👥 最大チャンネル登録者数", min_value=0, value=4000, step=500)
     submitted = st.form_submit_button("🔍 リサーチ開始", use_container_width=True)
 
 if submitted:
