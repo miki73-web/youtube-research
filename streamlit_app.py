@@ -1,11 +1,17 @@
+import re
 import streamlit as st
 import json
-import threading
 from datetime import datetime, timedelta
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+
+
+def extract_spreadsheet_id(url_or_id: str) -> str:
+    """URLでもIDでも受け取ってIDだけ返す"""
+    match = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", url_or_id)
+    return match.group(1) if match else url_or_id.strip()
 
 
 def get_youtube():
@@ -18,17 +24,18 @@ def get_sheets():
     return build("sheets", "v4", credentials=creds)
 
 
-def search_videos(youtube, keyword, days, min_views, log):
+def search_videos(youtube, keywords, days, min_views, log):
     published_after = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # 複数キーワードをスペース区切りでYouTubeに渡す
+    query = " ".join(keywords)
     videos = []
     next_page_token = None
-    max_pages = 3
 
-    log("🔍 YouTubeを検索中...")
+    log(f"🔍 **{' / '.join(keywords)}** を検索中...")
 
-    for _ in range(max_pages):
+    while True:
         response = youtube.search().list(
-            q=keyword,
+            q=query,
             part="id,snippet",
             type="video",
             publishedAfter=published_after,
@@ -94,9 +101,10 @@ def filter_by_subscribers(youtube, videos, max_subs, log):
     return result
 
 
-def write_to_sheets(sheets, videos, keyword, spreadsheet_id, log):
+def write_to_sheets(sheets, videos, keywords, spreadsheet_id, log):
     today = datetime.now().strftime("%Y-%m-%d")
-    sheet_name = f"{today}_{keyword}"
+    keyword_label = "_".join(keywords)[:20]  # シート名が長くなりすぎないよう20文字制限
+    sheet_name = f"{today}_{keyword_label}"
 
     spreadsheet = sheets.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
     sheet_names = [s["properties"]["title"] for s in spreadsheet["sheets"]]
@@ -130,20 +138,19 @@ st.set_page_config(page_title="YouTube リサーチツール", page_icon="🎬",
 st.title("🎬 YouTube リサーチツール")
 st.caption("条件を入力して「リサーチ開始」を押してください")
 
-# スプレッドシートID入力欄（フォームの外に出して説明を添える）
-spreadsheet_id = st.text_input(
-    "📊 スプレッドシートID",
-    placeholder="例：1bmmWVlcDCkM1seH239xmwTTkHYo0jYNL-Yq-2ZrxJWI",
-    help="スプレッドシートのURLの /d/ と /edit の間の文字列を貼り付けてください"
+# スプレッドシート入力（URLもIDもOK）
+spreadsheet_input = st.text_input(
+    "📊 スプレッドシートのURLまたはID",
+    placeholder="https://docs.google.com/spreadsheets/d/xxxxx/edit　またはIDのみ",
 )
 
-with st.expander("📌 スプレッドシートIDの確認方法と共有設定"):
+with st.expander("📌 スプレッドシートURLの確認方法と共有設定"):
     st.markdown("""
-**① スプレッドシートIDの場所**
+**① スプレッドシートのURLをそのまま貼り付けてOKです**
 
-スプレッドシートのURLからコピーしてください：
+例：
 ```
-https://docs.google.com/spreadsheets/d/【ここをコピー】/edit
+https://docs.google.com/spreadsheets/d/1bmmWVlc.../edit
 ```
 
 **② 書き込み権限の設定（初回のみ）**
@@ -155,17 +162,32 @@ youtube-research@youtube-research-494812.iam.gserviceaccount.com
     """)
 
 with st.form("search_form"):
-    keyword   = st.text_input("🔑 キーワード", value="心理学")
-    days      = st.number_input("📅 投稿期間（日以内）", min_value=1, max_value=3650, value=365)
+    keyword_input = st.text_input(
+        "🔑 キーワード（複数の場合はカンマ区切り）",
+        value="心理学",
+        placeholder="例：心理学、マーケティング　または　心理学,マーケティング"
+    )
+    days = st.number_input(
+        "📅 投稿期間（1〜365日以内）",
+        min_value=1, max_value=365, value=365,
+        help="1〜365日の範囲で指定してください"
+    )
     min_views = st.number_input("▶️ 最低再生数", min_value=0, value=10000, step=1000)
     max_subs  = st.number_input("👥 最大登録者数", min_value=0, value=4000, step=500)
+
+    st.caption("⚠️ キーワードが多い・件数が多いほどAPIの使用量が増えます（1日10,000ポイント上限）")
+
     submitted = st.form_submit_button("🔍 リサーチ開始", use_container_width=True)
 
 if submitted:
-    if not keyword.strip():
+    # キーワードをカンマまたは読点で分割
+    keywords = [k.strip() for k in re.split(r"[,、]", keyword_input) if k.strip()]
+    spreadsheet_id = extract_spreadsheet_id(spreadsheet_input)
+
+    if not keywords:
         st.error("キーワードを入力してください")
-    elif not spreadsheet_id.strip():
-        st.error("スプレッドシートIDを入力してください")
+    elif not spreadsheet_id:
+        st.error("スプレッドシートのURLまたはIDを入力してください")
     else:
         log_area = st.empty()
         logs = []
@@ -178,11 +200,11 @@ if submitted:
             youtube = get_youtube()
             sheets  = get_sheets()
 
-            videos   = search_videos(youtube, keyword.strip(), int(days), int(min_views), log)
+            videos   = search_videos(youtube, keywords, int(days), int(min_views), log)
             filtered = filter_by_subscribers(youtube, videos, int(max_subs), log)
 
             if filtered:
-                write_to_sheets(sheets, filtered, keyword.strip(), spreadsheet_id.strip(), log)
+                write_to_sheets(sheets, filtered, keywords, spreadsheet_id, log)
                 st.success(f"完了！{len(filtered)} 件をスプレッドシートに出力しました 🎉")
             else:
                 st.warning("条件に合う動画が見つかりませんでした。条件を変えて試してみてください。")
